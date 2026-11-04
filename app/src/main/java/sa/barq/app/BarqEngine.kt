@@ -33,6 +33,7 @@ class BarqEngine(private val ctx: Context) {
     var failed by mutableStateOf(false)
     var filesCount by mutableIntStateOf(0)
     var displayName by mutableStateOf("")
+    var peerName by mutableStateOf("")
     var senderName by mutableStateOf("")
     var transferStartedAt by mutableLongStateOf(0L)
     var transferItems by mutableStateOf(listOf<TransferItem>())
@@ -140,6 +141,12 @@ class BarqEngine(private val ctx: Context) {
                     server!!.accept().also { socket = it }
                 } else connectWithRetry(info.groupOwnerAddress.hostAddress!!)
                 if (!isCurrent(transferGeneration)) return@Thread
+                val handshakeOut = DataOutputStream(s.getOutputStream())
+                handshakeOut.writeUTF(localName)
+                handshakeOut.flush()
+                val peerNameFromSocket = DataInputStream(s.getInputStream()).readUTF()
+                if (!isCurrent(transferGeneration)) return@Thread
+                peerName = peerNameFromSocket
                 if (transferMode == Mode.SEND) send(s, transferFiles, transferGeneration)
                 else receive(s, transferGeneration)
                 if (isCurrent(transferGeneration)) {
@@ -273,7 +280,7 @@ class BarqEngine(private val ctx: Context) {
         generation++
         started = false; connected = false; done = false; failed = false
         progress = 0f; progressIndeterminate = false; speed = ""; currentFile = ""; peers = emptyList()
-        transferItems = emptyList(); senderName = ""; transferStartedAt = 0L; connectionQuality = ""
+        transferItems = emptyList(); peerName = ""; senderName = ""; transferStartedAt = 0L; connectionQuality = ""
     }
 
     fun stop() {
