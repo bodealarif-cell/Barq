@@ -94,7 +94,7 @@ fun Reveal(delayMs: Int, modifier: Modifier = Modifier, content: @Composable () 
 
 // ───────────────────────── الأيقونات (مرسومة يدوياً على شبكة 24) ─────────────────────────
 
-enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE }
+enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE, APPS, FILES, SEARCH, CHECK, OPEN, INSTALL }
 
 @Composable
 fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
@@ -141,6 +141,36 @@ fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifi
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.8f * u), style = st
                 )
                 line(10.5f, 18f, 13.5f, 18f)
+            }
+            BarqIcon.APPS -> {
+                val r = androidx.compose.ui.geometry.CornerRadius(1.8f * u)
+                for ((x, y) in listOf(4f to 4f, 14f to 4f, 4f to 14f, 14f to 14f)) {
+                    drawRoundRect(tint, Offset(x * u, y * u), Size(6f * u, 6f * u), r, style = st)
+                }
+            }
+            BarqIcon.FILES -> {
+                val p = Path().apply {
+                    moveTo(6f * u, 3f * u); lineTo(14f * u, 3f * u); lineTo(18f * u, 7f * u)
+                    lineTo(18f * u, 21f * u); lineTo(6f * u, 21f * u); close()
+                }
+                drawPath(p, tint, style = st)
+                line(14f, 3f, 14f, 7f); line(14f, 7f, 18f, 7f)
+                line(9f, 12f, 15f, 12f); line(9f, 16f, 15f, 16f)
+            }
+            BarqIcon.SEARCH -> {
+                drawCircle(tint, 5.6f * u, Offset(10.5f * u, 10.5f * u), style = st)
+                line(14.8f, 14.8f, 20f, 20f)
+            }
+            BarqIcon.CHECK -> {
+                line(5f, 12.5f, 10f, 17.5f); line(10f, 17.5f, 19f, 7f)
+            }
+            BarqIcon.OPEN -> {
+                line(11f, 13f, 20f, 4f); line(14f, 4f, 20f, 4f); line(20f, 4f, 20f, 10f)
+                line(18f, 14f, 18f, 20f); line(18f, 20f, 4f, 20f); line(4f, 20f, 4f, 6f); line(4f, 6f, 10f, 6f)
+            }
+            BarqIcon.INSTALL -> {
+                line(12f, 3f, 12f, 14f); line(7f, 9f, 12f, 14f); line(17f, 9f, 12f, 14f)
+                line(4f, 16f, 4f, 21f); line(4f, 21f, 20f, 21f); line(20f, 21f, 20f, 16f)
             }
         }
     }
@@ -320,6 +350,11 @@ private fun kindOf(name: String): FileKind {
 
 @Composable
 fun FileTile(uri: android.net.Uri?, name: String, modifier: Modifier = Modifier) {
+    val appPkg = remember(uri) { sa.barq.app.apps.AppBundler.packageFor(uri) }
+    if (appPkg != null) {
+        AppIcon(appPkg, 50.dp, modifier)
+        return
+    }
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(initialValue = null, uri) {
         value = try {
@@ -342,4 +377,69 @@ fun FileTile(uri: android.net.Uri?, name: String, modifier: Modifier = Modifier)
             contentAlignment = Alignment.Center
         ) { BText(kind.label, BarqType.Tag, kind.color) }
     }
+}
+
+/** أيقونة التطبيق الحقيقية (تُحمَّل بالخلفية وتُخزَّن مؤقتاً) داخل لوح مقصوص قطرياً. */
+@Composable
+fun AppIcon(pkg: String, size: Dp, modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val icon by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
+        initialValue = sa.barq.app.apps.AppCatalog.cached(pkg), pkg
+    ) {
+        if (value == null) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                sa.barq.app.apps.AppCatalog.icon(ctx, pkg)
+            }
+        }
+    }
+    Box(
+        modifier.size(size).clip(SlashShape(size * 0.2f)).background(BarqColors.Surface2),
+        contentAlignment = Alignment.Center
+    ) {
+        icon?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize()) }
+    }
+}
+
+/** زر إغلاق مربّع صغير بنفس شكل برق. */
+@Composable
+fun CloseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = SlashShape(10.dp)
+    Box(
+        modifier.size(44.dp).clip(shape).border(1.dp, BarqColors.Line, shape).barqClickable(onClick),
+        contentAlignment = Alignment.Center
+    ) { BarqIconView(BarqIcon.CLOSE, BarqColors.Bone, 20.dp) }
+}
+
+/** زر إجراء صغير داخل صف الملف (تثبيت / فتح). */
+@Composable
+fun MiniAction(text: String, icon: BarqIcon, accent: Color, filled: Boolean, onClick: () -> Unit) {
+    val shape = SlashShape(8.dp)
+    androidx.compose.foundation.layout.Row(
+        Modifier
+            .height(36.dp)
+            .clip(shape)
+            .then(if (filled) Modifier.background(accent) else Modifier.border(1.dp, accent.copy(alpha = 0.6f), shape))
+            .barqClickable(onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BarqIconView(icon, if (filled) BarqColors.Ink else accent, 16.dp)
+        Box(Modifier.width(7.dp))
+        BText(text, BarqType.Label, if (filled) BarqColors.Ink else accent)
+    }
+}
+
+/** شريحة مرشِّح (تُستخدم في صفحة التطبيقات). */
+@Composable
+fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = SlashShape(8.dp)
+    Box(
+        modifier
+            .height(38.dp)
+            .clip(shape)
+            .then(if (selected) Modifier.background(BarqColors.Volt) else Modifier.border(1.dp, BarqColors.Line, shape))
+            .barqClickable(onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) { BText(text, BarqType.Label, if (selected) BarqColors.Ink else BarqColors.Bone, maxLines = 1) }
 }

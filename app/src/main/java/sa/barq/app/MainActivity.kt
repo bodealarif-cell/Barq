@@ -2,10 +2,13 @@ package sa.barq.app
 
 import android.Manifest
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
+import android.net.Uri
 import android.os.Bundle
+import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -21,28 +24,47 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import sa.barq.app.apps.ApkInstaller
+import sa.barq.app.apps.AppBundler
+import sa.barq.app.apps.InstallBus
+import sa.barq.app.apps.InstallMessage
+import sa.barq.app.ui.AppsScreen
 import sa.barq.app.ui.BarqTheme
+import sa.barq.app.ui.InstallBanner
+import sa.barq.app.ui.InstallLockedDialog
+import sa.barq.app.ui.InstallWarnDialog
+import sa.barq.app.ui.SendKindDialog
 import sa.barq.app.ui.HomeScreen
 import sa.barq.app.ui.InkBackdrop
 import sa.barq.app.ui.TransferScreen
 import sa.barq.app.ui.WelcomeScreen
 import java.io.File
 
-enum class Screen { WELCOME, HOME, TRANSFER }
+enum class Screen { WELCOME, HOME, APPS, TRANSFER }
 
 class MainActivity : ComponentActivity() {
     private lateinit var engine: BarqEngine
     private var screen by mutableStateOf(Screen.WELCOME)
     private var displayName by mutableStateOf("")
     private var afterPerms: (() -> Unit)? = null
+
+    // إرسال: اختيار نوع الإرسال
+    private var showSendKind by mutableStateOf(false)
+    // تثبيت: الملف المنتظر + الحوارات + هل ننتظر عودة المستخدم من الإعدادات
+    private var pendingInstall by mutableStateOf<TransferItem?>(null)
+    private var showInstallLocked by mutableStateOf(false)
+    private var showInstallWarn by mutableStateOf(false)
+    private var waitingForSettings = false
 
     private val permLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         val action = afterPerms
@@ -74,6 +96,80 @@ class MainActivity : ComponentActivity() {
         else { afterPerms = { continueIfReady() }; permLauncher.launch(arrayOf(p)) }
     }
 
+    private val prefs get() = getSharedPreferences("barq_preferences", MODE_PRIVATE)
+
+    private fun leaveTransfer() {
+        engine.stop()
+        AppBundler.clean(this)
+        screen = Screen.HOME
+    }
+
+    private fun startAppsTransfer(result: AppBundler.Result) {
+        if (result.items.isEmpty()) {
+            Toast.makeText(this, "ما قدرنا نجهّز التطبيقات المختارة", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (result.skipped.isNotEmpty()) {
+            Toast.makeText(this, "تعذّر تجهيز: " + result.skipped.joinToString("، "), Toast.LENGTH_LONG).show()
+        }
+        withPerms {
+            engine.begin(Mode.SEND, result.uris, displayName, result.names)
+            screen = Screen.TRANSFER
+        }
+    }
+
+    /** فتح ملف مستلم بالتطبيق المناسب. */
+    private fun openItem(item: TransferItem) {
+        val uri = item.uri ?: return
+        val ext = item.name.substringAfterLast('.', "").lowercase()
+        val mime = contentResolver.getType(uri)
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: "*/*"
+        val i = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        try { startActivity(i) }
+        catch (_: ActivityNotFoundException) { Toast.makeText(this, "ما لقينا تطبيق يفتح هذا الملف", Toast.LENGTH_LONG).show() }
+        catch (_: SecurityException) { Toast.makeText(this, "ما قدرنا نفتح الملف", Toast.LENGTH_LONG).show() }
+    }
+
+    /** نقطة الدخول لأي تثبيت: القيد أولاً، ثم تنبيه الثقة (مرة واحدة)، ثم التثبيت. */
+    private fun requestInstall(item: TransferItem) {
+        pendingInstall = item
+        if (!ApkInstaller.canInstall(this)) { showInstallLocked = true; return }
+        continueInstall()
+    }
+
+    private fun continueInstall() {
+        val item = pendingInstall ?: return
+        if (!prefs.getBoolean("install_warned", false)) { showInstallWarn = true; return }
+        runInstall(item)
+    }
+
+    private fun runInstall(item: TransferItem) {
+        pendingInstall = null
+        val uri: Uri = item.uri ?: return
+        Toast.makeText(this, "جارٍ تجهيز التثبيت…", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                ApkInstaller.install(applicationContext, uri, item.name)
+            } catch (e: Exception) {
+                InstallBus.message = InstallMessage(false, "تعذّر تجهيز التثبيت: ${e.message ?: "ملف غير صالح"}")
+            }
+        }.start()
+    }
+
+    /** المستخدم رجع من صفحة الإعدادات: نكمل التثبيت تلقائياً إن فعّل الخيار. */
+    override fun onResume() {
+        super.onResume()
+        if (!waitingForSettings) return
+        waitingForSettings = false
+        if (ApkInstaller.canInstall(this)) continueInstall()
+        else {
+            pendingInstall = null
+            Toast.makeText(this, "ما انفعّل الخيار، التثبيت متوقف", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun shareApp() {
         try {
             val dir = File(cacheDir, "share").apply { mkdirs() }
@@ -102,6 +198,7 @@ class MainActivity : ComponentActivity() {
         displayName = getSharedPreferences("barq_preferences", MODE_PRIVATE)
             .getString("display_name", "").orEmpty()
         engine = BarqEngine(this)
+        AppBundler.clean(this)
         ContextCompat.registerReceiver(this, engine.receiver, engine.filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent {
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -126,7 +223,7 @@ class MainActivity : ComponentActivity() {
                                                 .edit().putString("display_name", it).apply()
                                             engine.updateDisplayName(it)
                                         },
-                                        onSend = { withPerms { picker.launch(arrayOf("*/*")) } },
+                                        onSend = { showSendKind = true },
                                         onReceive = {
                                             withPerms {
                                                 engine.begin(Mode.RECEIVE, emptyList(), displayName)
@@ -135,16 +232,59 @@ class MainActivity : ComponentActivity() {
                                         },
                                         onShare = { shareApp() }
                                     )
+                                    Screen.APPS -> {
+                                        BackHandler { screen = Screen.HOME }
+                                        AppsScreen(
+                                            onBack = { screen = Screen.HOME },
+                                            onPrepared = { startAppsTransfer(it) }
+                                        )
+                                    }
                                     Screen.TRANSFER -> {
-                                        BackHandler { engine.stop(); screen = Screen.HOME }
+                                        BackHandler { leaveTransfer() }
                                         TransferScreen(
                                             engine,
-                                            onBack = { engine.stop(); screen = Screen.HOME },
-                                            onPickMore = { picker.launch(arrayOf("*/*")) }
+                                            onBack = { leaveTransfer() },
+                                            onPickMore = { picker.launch(arrayOf("*/*")) },
+                                            onOpen = { openItem(it) },
+                                            onInstall = { requestInstall(it) }
                                         )
                                     }
                                 }
                             }
+                            if (showSendKind) {
+                                SendKindDialog(
+                                    onFiles = { showSendKind = false; withPerms { picker.launch(arrayOf("*/*")) } },
+                                    onApps = { showSendKind = false; withPerms { screen = Screen.APPS } },
+                                    onDismiss = { showSendKind = false }
+                                )
+                            }
+                            if (showInstallLocked) {
+                                InstallLockedDialog(
+                                    onEnable = {
+                                        showInstallLocked = false
+                                        waitingForSettings = true
+                                        startActivity(ApkInstaller.unknownSourcesIntent(this@MainActivity))
+                                    },
+                                    onLater = { showInstallLocked = false; pendingInstall = null }
+                                )
+                            }
+                            if (showInstallWarn) {
+                                InstallWarnDialog(
+                                    sender = engine.senderName,
+                                    fileName = ApkInstaller.labelOf(pendingInstall?.name.orEmpty()),
+                                    onConfirm = {
+                                        showInstallWarn = false
+                                        prefs.edit().putBoolean("install_warned", true).apply()
+                                        pendingInstall?.let { runInstall(it) }
+                                    },
+                                    onDismiss = { showInstallWarn = false; pendingInstall = null }
+                                )
+                            }
+                            InstallBanner(
+                                message = InstallBus.message,
+                                onDismiss = { InstallBus.message = null },
+                                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp)
+                            )
                         }
                     }
                 }

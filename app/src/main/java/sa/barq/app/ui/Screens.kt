@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import sa.barq.app.BarqEngine
 import sa.barq.app.Mode
+import sa.barq.app.TransferItem
 import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
@@ -215,7 +216,7 @@ fun HomeScreen(
 
 // ───────────────────────── النقل ─────────────────────────
 
-private fun formatFileSize(size: Long): String = when {
+fun formatFileSize(size: Long): String = when {
     size < 0L -> "حجم غير معروف"
     size < 1024L -> "$size بايت"
     size < 1024L * 1024L -> "%.1f كيلوبايت".format(size / 1024.0)
@@ -258,7 +259,13 @@ private fun PeerRow(name: String, accent: Color, index: Int, onClick: () -> Unit
 }
 
 @Composable
-fun TransferScreen(e: BarqEngine, onBack: () -> Unit, onPickMore: () -> Unit) {
+fun TransferScreen(
+    e: BarqEngine,
+    onBack: () -> Unit,
+    onPickMore: () -> Unit,
+    onOpen: (TransferItem) -> Unit = {},
+    onInstall: (TransferItem) -> Unit = {}
+) {
     val send = e.mode == Mode.SEND
     val accent = if (send) BarqColors.Volt else BarqColors.Arc
     val haptic = LocalHapticFeedback.current
@@ -378,7 +385,7 @@ fun TransferScreen(e: BarqEngine, onBack: () -> Unit, onPickMore: () -> Unit) {
             BText("الملفات", BarqType.Label, BarqColors.Mute, Modifier.padding(bottom = 8.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(e.transferItems) { item ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Top) {
                         FileTile(item.uri, item.name)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
@@ -387,6 +394,15 @@ fun TransferScreen(e: BarqEngine, onBack: () -> Unit, onPickMore: () -> Unit) {
                                 "${formatFileSize(item.size)} • ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(item.startedAt))}",
                                 BarqType.Tag, BarqColors.Mute
                             )
+                            // الملف المستلم: تثبيت إن كان تطبيقاً، وإلا فتح
+                            if (!send && item.uri != null) {
+                                Spacer(Modifier.height(8.dp))
+                                if (sa.barq.app.apps.ApkInstaller.isInstallable(item.name)) {
+                                    MiniAction("تثبيت", BarqIcon.INSTALL, BarqColors.Volt, filled = true) { onInstall(item) }
+                                } else {
+                                    MiniAction("فتح", BarqIcon.OPEN, BarqColors.Arc, filled = false) { onOpen(item) }
+                                }
+                            }
                         }
                     }
                 }

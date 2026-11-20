@@ -39,6 +39,7 @@ class BarqEngine(private val ctx: Context) {
     var connectionQuality by mutableStateOf("")
 
     private var files: List<Uri> = emptyList()
+    private var fileNames: Map<Uri, String> = emptyMap()
     private var localName = ""
     private var started = false
     private var p2pDisabledObserved = false
@@ -83,8 +84,8 @@ class BarqEngine(private val ctx: Context) {
         addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
     }
 
-    fun begin(m: Mode, uris: List<Uri>, name: String = localName) {
-        reset(); active = true; mode = m; files = uris; filesCount = uris.size
+    fun begin(m: Mode, uris: List<Uri>, name: String = localName, names: Map<Uri, String> = emptyMap()) {
+        reset(); active = true; mode = m; files = uris; fileNames = names; filesCount = uris.size
         localName = name.trim().ifBlank { "مستخدم برق" }
         displayName = localName
         status = if (m == Mode.SEND) "جاري البحث عن الأجهزة القريبة…" else "جاهز للاستقبال، خلّ المرسل يختارك"
@@ -97,7 +98,7 @@ class BarqEngine(private val ctx: Context) {
     }
 
     fun retry() {
-        begin(mode, if (mode == Mode.SEND) files else emptyList(), localName)
+        begin(mode, if (mode == Mode.SEND) files else emptyList(), localName, fileNames)
     }
 
     fun discover() {
@@ -181,9 +182,11 @@ class BarqEngine(private val ctx: Context) {
     private class Meta(val uri: Uri, val name: String, val size: Long)
 
     private fun meta(u: Uri): Meta {
-        var n = "file"
-        ctx.contentResolver.query(u, null, null, null, null)?.use {
-            if (it.moveToFirst()) { val i = it.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (i >= 0) n = it.getString(i) }
+        var n = fileNames[u] ?: if (u.scheme == "file") (u.lastPathSegment ?: "file") else "file"
+        if (fileNames[u] == null && u.scheme != "file") {
+            ctx.contentResolver.query(u, null, null, null, null)?.use {
+                if (it.moveToFirst()) { val i = it.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (i >= 0) n = it.getString(i) }
+            }
         }
         val sz = ctx.contentResolver.openAssetFileDescriptor(u, "r")?.use { it.length } ?: -1L
         return Meta(u, n, sz)
