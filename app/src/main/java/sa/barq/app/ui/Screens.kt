@@ -1,10 +1,12 @@
 package sa.barq.app.ui
 
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,11 +16,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,12 +45,32 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import sa.barq.app.TransferItem
 import sa.barq.app.BarqEngine
 import sa.barq.app.Mode
-import sa.barq.app.TransferItem
+import sa.barq.app.isAppArchiveFile
+import sa.barq.app.isApkFile
 import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
+
+data class InstalledApp(
+    val packageName: String,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.ImageBitmap? = null,
+    val sizeBytes: Long = 0L,
+    val versionName: String = "",
+    val isSplit: Boolean = false
+)
+data class DeviceMedia(val uri: Uri, val name: String, val size: Long)
+
+enum class SendCategory(val title: String) {
+    APPS("تطبيقات"),
+    VIDEOS("فيديوهات"),
+    FILES("ملفات"),
+    PACKAGES("حزم"),
+    AUDIO("صوتيات")
+}
 
 // ───────────────────────── البداية ─────────────────────────
 
@@ -167,17 +191,20 @@ fun HomeScreen(
     onSaveName: (String) -> Unit,
     onSend: () -> Unit,
     onReceive: () -> Unit,
-    onShare: () -> Unit
+    onShare: () -> Unit,
+    onReceived: () -> Unit = {}
 ) {
     var editing by remember { mutableStateOf(false) }
     if (editing) {
         NameDialog(displayName, onSave = { onSaveName(it); editing = false }, onDismiss = { editing = false })
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             BoltMark(38.dp)
             Spacer(Modifier.width(10.dp))
             BText("برق", BarqType.Title)
+            Spacer(Modifier.weight(1f))
+            InboxButton(onReceived)
         }
         Spacer(Modifier.height(26.dp))
         Reveal(delayMs = 60) {
@@ -215,6 +242,183 @@ fun HomeScreen(
 }
 
 // ───────────────────────── النقل ─────────────────────────
+
+@Composable
+fun SendPickerScreen(
+    apps: List<InstalledApp>,
+    media: List<DeviceMedia>,
+    selectedApps: Set<String>,
+    selectedMedia: Set<Uri>,
+    selectedFileCount: Int,
+    loadingMedia: Boolean,
+    category: SendCategory,
+    loadingApps: Boolean = false,
+    onCategorySelected: (SendCategory) -> Unit,
+    onToggleApp: (InstalledApp) -> Unit,
+    onToggleMedia: (DeviceMedia) -> Unit,
+    onOpenFiles: () -> Unit,
+    onSend: () -> Unit,
+    onBack: () -> Unit
+) {
+    val selectedCount = selectedApps.size + selectedMedia.size + selectedFileCount
+
+    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
+        Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                BText("إرسال", BarqType.Headline, BarqColors.Volt)
+                BText(
+                    if (selectedCount == 0) "اختر المحتوى الذي تريد إرساله"
+                    else "$selectedCount عنصر محدد",
+                    BarqType.Label,
+                    BarqColors.Mute
+                )
+            }
+            CloseButton(onBack)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SendCategory.entries.forEach { item ->
+                FilterChip(item.title, item == category, { onCategorySelected(item) })
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        when (category) {
+            SendCategory.APPS -> {
+                var query by remember { mutableStateOf("") }
+                val shown = remember(apps, query) {
+                    val q = query.trim()
+                    if (q.isEmpty()) apps
+                    else apps.filter { it.label.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true) }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BarqIconView(BarqIcon.SEARCH, BarqColors.Mute, 20.dp)
+                    Spacer(Modifier.width(10.dp))
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        textStyle = BarqType.Body.copy(color = BarqColors.Bone),
+                        cursorBrush = SolidColor(BarqColors.Volt),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            Box {
+                                if (query.isEmpty()) BText("ابحث بالاسم أو اسم الحزمة", BarqType.Body, BarqColors.Mute)
+                                inner()
+                            }
+                        }
+                    )
+                }
+                Box(Modifier.fillMaxWidth().height(1.dp).background(BarqColors.Line))
+                Spacer(Modifier.height(12.dp))
+                when {
+                    loadingApps -> Column(
+                        Modifier.weight(1f).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Radar(BarqColors.Volt, Modifier.size(150.dp)) { BoltMark(40.dp) }
+                        Spacer(Modifier.height(10.dp))
+                        BText("نجمع تطبيقات جوالك…", BarqType.Label, BarqColors.Mute)
+                    }
+                    shown.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        BText(
+                            if (apps.isEmpty()) "ما لقينا تطبيقات للإرسال" else "ما لقينا تطبيق بهذا الاسم",
+                            BarqType.Body, BarqColors.Mute
+                        )
+                    }
+                    else -> LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(shown, key = { it.packageName }) { app ->
+                            AppPickRow(app, app.packageName in selectedApps) { onToggleApp(app) }
+                        }
+                    }
+                }
+            }
+            SendCategory.VIDEOS, SendCategory.AUDIO -> {
+                if (loadingMedia) {
+                    BText("نجهز الوسائط…", BarqType.Body, BarqColors.Mute, Modifier.weight(1f))
+                } else {
+                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(media, key = { it.uri }) { item ->
+                            val checked = item.uri in selectedMedia
+                            val shape = SlashShape(14.dp)
+                            Row(
+                                Modifier.fillMaxWidth().clip(shape)
+                                    .background(if (checked) BarqColors.Volt.copy(alpha = 0.10f) else BarqColors.Surface1)
+                                    .border(1.dp, if (checked) BarqColors.Volt else BarqColors.Line, shape)
+                                    .barqClickable { onToggleMedia(item) }
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FileTile(item.uri, item.name)
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    BText(item.name, BarqType.Body, maxLines = 1)
+                                    BText(formatFileSize(item.size), BarqType.Tag, BarqColors.Mute)
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                SelectMark(checked)
+                            }
+                        }
+                    }
+                }
+            }
+            SendCategory.FILES, SendCategory.PACKAGES -> {
+                Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.Center) {
+                    BoltStrike(height = 96.dp, color = BarqColors.Arc)
+                    Spacer(Modifier.height(14.dp))
+                    BText(
+                        if (selectedFileCount == 0) "اختر ملفات من الجهاز"
+                        else "$selectedFileCount ملف محدد",
+                        BarqType.Subtitle,
+                        BarqColors.Bone
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    SlashButton("استعراض الملفات", onOpenFiles)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        SlashButton("إرسال المحدد", onSend, filled = selectedCount > 0)
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+@Composable
+private fun AppPickRow(app: InstalledApp, selected: Boolean, onClick: () -> Unit) {
+    val shape = SlashShape(14.dp)
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(shape)
+            .background(if (selected) BarqColors.Volt.copy(alpha = 0.10f) else BarqColors.Surface1)
+            .border(1.dp, if (selected) BarqColors.Volt else BarqColors.Line, shape)
+            .barqClickable(onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AppIconView(app.icon, 52.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            BText(app.label, BarqType.Subtitle, maxLines = 1)
+            BText(
+                (if (app.versionName.isNotBlank()) "v${app.versionName} • " else "") + app.packageName,
+                BarqType.Tag, BarqColors.Mute, maxLines = 1
+            )
+            Spacer(Modifier.height(5.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                InfoTag(formatFileSize(app.sizeBytes), BarqColors.Bone)
+                if (app.isSplit) InfoTag("مقسّم", BarqColors.Arc)
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        SelectMark(selected)
+    }
+}
 
 fun formatFileSize(size: Long): String = when {
     size < 0L -> "حجم غير معروف"
@@ -263,8 +467,8 @@ fun TransferScreen(
     e: BarqEngine,
     onBack: () -> Unit,
     onPickMore: () -> Unit,
-    onOpen: (TransferItem) -> Unit = {},
-    onInstall: (TransferItem) -> Unit = {}
+    onOpenFile: (Uri, String) -> Unit,
+    onInstallPackage: (Uri, String) -> Unit
 ) {
     val send = e.mode == Mode.SEND
     val accent = if (send) BarqColors.Volt else BarqColors.Arc
@@ -385,7 +589,7 @@ fun TransferScreen(
             BText("الملفات", BarqType.Label, BarqColors.Mute, Modifier.padding(bottom = 8.dp))
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(e.transferItems) { item ->
-                    Row(verticalAlignment = Alignment.Top) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         FileTile(item.uri, item.name)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
@@ -394,15 +598,17 @@ fun TransferScreen(
                                 "${formatFileSize(item.size)} • ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(item.startedAt))}",
                                 BarqType.Tag, BarqColors.Mute
                             )
-                            // الملف المستلم: تثبيت إن كان تطبيقاً، وإلا فتح
-                            if (!send && item.uri != null) {
-                                Spacer(Modifier.height(8.dp))
-                                if (sa.barq.app.apps.ApkInstaller.isInstallable(item.name)) {
-                                    MiniAction("تثبيت", BarqIcon.INSTALL, BarqColors.Volt, filled = true) { onInstall(item) }
-                                } else {
-                                    MiniAction("فتح", BarqIcon.OPEN, BarqColors.Arc, filled = false) { onOpen(item) }
+                        }
+                        if (e.mode == Mode.RECEIVE && item.uri != null) {
+                            val installable = item.name.isApkFile() || item.name.isAppArchiveFile()
+                            TextAction(
+                                if (installable) "تثبيت" else "فتح",
+                                if (installable) BarqColors.Volt else BarqColors.Arc,
+                                {
+                                    if (installable) onInstallPackage(item.uri, item.name)
+                                    else onOpenFile(item.uri, item.name)
                                 }
-                            }
+                            )
                         }
                     }
                 }

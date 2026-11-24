@@ -94,7 +94,7 @@ fun Reveal(delayMs: Int, modifier: Modifier = Modifier, content: @Composable () 
 
 // ───────────────────────── الأيقونات (مرسومة يدوياً على شبكة 24) ─────────────────────────
 
-enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE, APPS, FILES, SEARCH, CHECK, OPEN, INSTALL }
+enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE, SEARCH, CHECK, OPEN, INSTALL, INBOX }
 
 @Composable
 fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
@@ -142,21 +142,6 @@ fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifi
                 )
                 line(10.5f, 18f, 13.5f, 18f)
             }
-            BarqIcon.APPS -> {
-                val r = androidx.compose.ui.geometry.CornerRadius(1.8f * u)
-                for ((x, y) in listOf(4f to 4f, 14f to 4f, 4f to 14f, 14f to 14f)) {
-                    drawRoundRect(tint, Offset(x * u, y * u), Size(6f * u, 6f * u), r, style = st)
-                }
-            }
-            BarqIcon.FILES -> {
-                val p = Path().apply {
-                    moveTo(6f * u, 3f * u); lineTo(14f * u, 3f * u); lineTo(18f * u, 7f * u)
-                    lineTo(18f * u, 21f * u); lineTo(6f * u, 21f * u); close()
-                }
-                drawPath(p, tint, style = st)
-                line(14f, 3f, 14f, 7f); line(14f, 7f, 18f, 7f)
-                line(9f, 12f, 15f, 12f); line(9f, 16f, 15f, 16f)
-            }
             BarqIcon.SEARCH -> {
                 drawCircle(tint, 5.6f * u, Offset(10.5f * u, 10.5f * u), style = st)
                 line(14.8f, 14.8f, 20f, 20f)
@@ -171,6 +156,15 @@ fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifi
             BarqIcon.INSTALL -> {
                 line(12f, 3f, 12f, 14f); line(7f, 9f, 12f, 14f); line(17f, 9f, 12f, 14f)
                 line(4f, 16f, 4f, 21f); line(4f, 21f, 20f, 21f); line(20f, 21f, 20f, 16f)
+            }
+            BarqIcon.INBOX -> {
+                val p = Path().apply {
+                    moveTo(3f * u, 14f * u); lineTo(7.5f * u, 14f * u); lineTo(9f * u, 17f * u)
+                    lineTo(15f * u, 17f * u); lineTo(16.5f * u, 14f * u); lineTo(21f * u, 14f * u)
+                    lineTo(18.5f * u, 5f * u); lineTo(5.5f * u, 5f * u); close()
+                    moveTo(3f * u, 14f * u); lineTo(3f * u, 19f * u); lineTo(21f * u, 19f * u); lineTo(21f * u, 14f * u)
+                }
+                drawPath(p, tint, style = st)
             }
         }
     }
@@ -350,11 +344,6 @@ private fun kindOf(name: String): FileKind {
 
 @Composable
 fun FileTile(uri: android.net.Uri?, name: String, modifier: Modifier = Modifier) {
-    val appPkg = remember(uri) { sa.barq.app.apps.AppBundler.packageFor(uri) }
-    if (appPkg != null) {
-        AppIcon(appPkg, 50.dp, modifier)
-        return
-    }
     val context = LocalContext.current
     val bitmap by produceState<Bitmap?>(initialValue = null, uri) {
         value = try {
@@ -379,28 +368,56 @@ fun FileTile(uri: android.net.Uri?, name: String, modifier: Modifier = Modifier)
     }
 }
 
-/** أيقونة التطبيق الحقيقية (تُحمَّل بالخلفية وتُخزَّن مؤقتاً) داخل لوح مقصوص قطرياً. */
+
+// ───────────────────────── عناصر القوائم (اختيار / تصنيف / إجراءات) ─────────────────────────
+
+/** أيقونة التطبيق (محمّلة مسبقاً مع القائمة) داخل لوح مقصوص قطرياً. */
 @Composable
-fun AppIcon(pkg: String, size: Dp, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    val icon by produceState<androidx.compose.ui.graphics.ImageBitmap?>(
-        initialValue = sa.barq.app.apps.AppCatalog.cached(pkg), pkg
-    ) {
-        if (value == null) {
-            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                sa.barq.app.apps.AppCatalog.icon(ctx, pkg)
-            }
-        }
-    }
+fun AppIconView(icon: androidx.compose.ui.graphics.ImageBitmap?, size: Dp, modifier: Modifier = Modifier) {
     Box(
         modifier.size(size).clip(SlashShape(size * 0.2f)).background(BarqColors.Surface2),
         contentAlignment = Alignment.Center
     ) {
-        icon?.let { Image(it, contentDescription = null, modifier = Modifier.fillMaxSize()) }
+        if (icon != null) Image(icon, contentDescription = null, modifier = Modifier.fillMaxSize())
     }
 }
 
-/** زر إغلاق مربّع صغير بنفس شكل برق. */
+/** علامة اختيار بشكل برق بدل مربع Material القياسي. */
+@Composable
+fun SelectMark(selected: Boolean) {
+    val shape = SlashShape(6.dp)
+    Box(
+        Modifier.size(26.dp).clip(shape)
+            .then(if (selected) Modifier.background(BarqColors.Volt) else Modifier.border(1.5.dp, BarqColors.Line, shape)),
+        contentAlignment = Alignment.Center
+    ) { if (selected) BarqIconView(BarqIcon.CHECK, BarqColors.Ink, 16.dp) }
+}
+
+/** وسم صغير (الحجم / مقسّم). */
+@Composable
+fun InfoTag(text: String, accent: Color = BarqColors.Mute) {
+    val shape = SlashShape(5.dp)
+    Box(Modifier.clip(shape).border(1.dp, accent.copy(alpha = 0.55f), shape).padding(horizontal = 7.dp, vertical = 1.dp)) {
+        BText(text, BarqType.Tag, accent, maxLines = 1)
+    }
+}
+
+/** شريحة تصنيف بلا أيموجي. */
+@Composable
+fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = SlashShape(8.dp)
+    Box(
+        modifier
+            .height(38.dp)
+            .clip(shape)
+            .then(if (selected) Modifier.background(BarqColors.Volt) else Modifier.border(1.dp, BarqColors.Line, shape))
+            .barqClickable(onClick)
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) { BText(text, BarqType.Label, if (selected) BarqColors.Ink else BarqColors.Bone, maxLines = 1) }
+}
+
+/** زر إغلاق مربّع صغير. */
 @Composable
 fun CloseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val shape = SlashShape(10.dp)
@@ -429,17 +446,12 @@ fun MiniAction(text: String, icon: BarqIcon, accent: Color, filled: Boolean, onC
     }
 }
 
-/** شريحة مرشِّح (تُستخدم في صفحة التطبيقات). */
+/** زر "المستلمة" الصغير أعلى الشاشة الرئيسية. */
 @Composable
-fun FilterChip(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val shape = SlashShape(8.dp)
+fun InboxButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = SlashShape(10.dp)
     Box(
-        modifier
-            .height(38.dp)
-            .clip(shape)
-            .then(if (selected) Modifier.background(BarqColors.Volt) else Modifier.border(1.dp, BarqColors.Line, shape))
-            .barqClickable(onClick)
-            .padding(horizontal = 14.dp),
+        modifier.size(44.dp).clip(shape).border(1.dp, BarqColors.Arc.copy(alpha = 0.55f), shape).barqClickable(onClick),
         contentAlignment = Alignment.Center
-    ) { BText(text, BarqType.Label, if (selected) BarqColors.Ink else BarqColors.Bone, maxLines = 1) }
+    ) { BarqIconView(BarqIcon.INBOX, BarqColors.Arc, 22.dp) }
 }
