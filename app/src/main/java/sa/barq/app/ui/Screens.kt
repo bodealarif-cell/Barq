@@ -192,7 +192,8 @@ fun HomeScreen(
     onSend: () -> Unit,
     onReceive: () -> Unit,
     onShare: () -> Unit,
-    onReceived: () -> Unit = {}
+    onReceived: () -> Unit = {},
+    onPc: () -> Unit = {}
 ) {
     var editing by remember { mutableStateOf(false) }
     if (editing) {
@@ -204,6 +205,8 @@ fun HomeScreen(
             Spacer(Modifier.width(10.dp))
             BText("برق", BarqType.Title)
             Spacer(Modifier.weight(1f))
+            PcButton(onPc)
+            Spacer(Modifier.width(8.dp))
             InboxButton(onReceived)
         }
         Spacer(Modifier.height(26.dp))
@@ -253,6 +256,7 @@ fun SendPickerScreen(
     loadingMedia: Boolean,
     category: SendCategory,
     loadingApps: Boolean = false,
+    preparingText: String? = null,
     onCategorySelected: (SendCategory) -> Unit,
     onToggleApp: (InstalledApp) -> Unit,
     onToggleMedia: (DeviceMedia) -> Unit,
@@ -384,7 +388,11 @@ fun SendPickerScreen(
         }
 
         Spacer(Modifier.height(12.dp))
-        SlashButton("إرسال المحدد", onSend, filled = selectedCount > 0)
+        SlashButton(
+            preparingText ?: "إرسال المحدد",
+            { if (preparingText == null) onSend() },
+            filled = selectedCount > 0 && preparingText == null
+        )
         Spacer(Modifier.height(16.dp))
     }
 }

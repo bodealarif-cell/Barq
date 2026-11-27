@@ -94,7 +94,7 @@ fun Reveal(delayMs: Int, modifier: Modifier = Modifier, content: @Composable () 
 
 // ───────────────────────── الأيقونات (مرسومة يدوياً على شبكة 24) ─────────────────────────
 
-enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE, SEARCH, CHECK, OPEN, INSTALL, INBOX }
+enum class BarqIcon { SEND, RECEIVE, CLOSE, SHARE, REFRESH, PHONE, SEARCH, CHECK, OPEN, INSTALL, INBOX, PC }
 
 @Composable
 fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifier = Modifier) {
@@ -156,6 +156,13 @@ fun BarqIconView(icon: BarqIcon, tint: Color, size: Dp = 24.dp, modifier: Modifi
             BarqIcon.INSTALL -> {
                 line(12f, 3f, 12f, 14f); line(7f, 9f, 12f, 14f); line(17f, 9f, 12f, 14f)
                 line(4f, 16f, 4f, 21f); line(4f, 21f, 20f, 21f); line(20f, 21f, 20f, 16f)
+            }
+            BarqIcon.PC -> {
+                drawRoundRect(
+                    tint, Offset(3f * u, 4f * u), Size(18f * u, 12f * u),
+                    androidx.compose.ui.geometry.CornerRadius(1.8f * u), style = st
+                )
+                line(8f, 20f, 16f, 20f); line(12f, 16f, 12f, 20f)
             }
             BarqIcon.INBOX -> {
                 val p = Path().apply {
@@ -454,4 +461,14 @@ fun InboxButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         modifier.size(44.dp).clip(shape).border(1.dp, BarqColors.Arc.copy(alpha = 0.55f), shape).barqClickable(onClick),
         contentAlignment = Alignment.Center
     ) { BarqIconView(BarqIcon.INBOX, BarqColors.Arc, 22.dp) }
+}
+
+/** زر "الحاسوب" الصغير أعلى الشاشة الرئيسية. */
+@Composable
+fun PcButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = SlashShape(10.dp)
+    Box(
+        modifier.size(44.dp).clip(shape).border(1.dp, BarqColors.Volt.copy(alpha = 0.55f), shape).barqClickable(onClick),
+        contentAlignment = Alignment.Center
+    ) { BarqIconView(BarqIcon.PC, BarqColors.Volt, 22.dp) }
 }

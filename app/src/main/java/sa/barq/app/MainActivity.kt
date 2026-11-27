@@ -45,7 +45,11 @@ import sa.barq.app.ui.BarqTheme
 import sa.barq.app.ui.DeviceMedia
 import sa.barq.app.ui.HomeScreen
 import sa.barq.app.ui.InkBackdrop
+import sa.barq.app.lan.LanEngine
+import sa.barq.app.lan.LanLinks
+import sa.barq.app.lan.Peer
 import sa.barq.app.ui.InstallLockedDialog
+import sa.barq.app.ui.PcScreen
 import sa.barq.app.ui.InstalledApp
 import sa.barq.app.ui.ReceivedScreen
 import sa.barq.app.ui.SendCategory
@@ -53,13 +57,14 @@ import sa.barq.app.ui.SendPickerScreen
 import sa.barq.app.ui.TransferScreen
 import sa.barq.app.ui.WelcomeScreen
 import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
-enum class Screen { WELCOME, HOME, SEND_PICKER, RECEIVED, TRANSFER }
+enum class Screen { WELCOME, HOME, SEND_PICKER, RECEIVED, PC, TRANSFER }
 
 class MainActivity : ComponentActivity() {
     private lateinit var engine: BarqEngine
@@ -72,6 +77,7 @@ class MainActivity : ComponentActivity() {
     private var selectedMedia by mutableStateOf(setOf<Uri>())
     private var loadingMedia by mutableStateOf(false)
     private var loadingApps by mutableStateOf(false)
+    private var preparingText by mutableStateOf<String?>(null)
     private var showInstallLocked by mutableStateOf(false)
     private var sendCategory by mutableStateOf(SendCategory.APPS)
     private var afterPerms: (() -> Unit)? = null
@@ -101,6 +107,17 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) loadMedia(sendCategory)
             else Toast.makeText(this, "اسمح لبرق بالوصول إلى الوسائط لاختيارها", Toast.LENGTH_LONG).show()
+        }
+
+    private lateinit var lan: LanEngine
+    private var pcTarget: Peer? = null
+
+    /** اختيار ملفات لإرسالها إلى حاسوب/جهاز على الشبكة المحلية. */
+    private val pcPicker =
+        registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+            val peer = pcTarget
+            pcTarget = null
+            if (peer != null && uris.isNotEmpty()) lan.send(peer, uris)
         }
 
     private val picker =
@@ -249,19 +266,36 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendSelection() {
+        if (preparingText != null) return
         val apps = availableApps.filter { it.packageName in selectedApps }
         val files = selectedFiles + selectedMedia
         if (apps.isEmpty() && files.isEmpty()) return
-        Toast.makeText(this, "جارٍ تجهيز المحتوى للإرسال…", Toast.LENGTH_SHORT).show()
+        // الملفات العادية لا تحتاج تجهيزاً: نبدأ الإرسال فوراً
+        if (apps.isEmpty()) {
+            engine.begin(Mode.SEND, files, displayName)
+            screen = Screen.TRANSFER
+            return
+        }
+        preparingText = "جارٍ التجهيز…"
         Thread {
             try {
-                val uris = apps.map(::exportInstalledApp) + files
+                // نظّف حزم الإرسال القديمة حتى لا تتراكم في ذاكرة التطبيق المؤقتة
+                File(cacheDir, "share").listFiles()
+                    ?.filter { it.name.endsWith(".barqapp") }
+                    ?.forEach { it.delete() }
+                val exported = apps.mapIndexed { i, app ->
+                    runOnUiThread { preparingText = "جارٍ تجهيز ${app.label} (${i + 1}/${apps.size})" }
+                    exportInstalledApp(app)
+                }
+                val uris = exported + files
                 runOnUiThread {
+                    preparingText = null
                     engine.begin(Mode.SEND, uris, displayName)
                     screen = Screen.TRANSFER
                 }
             } catch (e: IOException) {
                 runOnUiThread {
+                    preparingText = null
                     Toast.makeText(
                         this,
                         "تعذّر تجهيز التطبيق للإرسال: ${e.localizedMessage ?: "خطأ في قراءة ملفات التطبيق"}",
@@ -270,10 +304,12 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (_: PackageManager.NameNotFoundException) {
                 runOnUiThread {
+                    preparingText = null
                     Toast.makeText(this, "أحد التطبيقات لم يعد مثبتًا؛ ارجع وحدّث القائمة", Toast.LENGTH_LONG).show()
                 }
             } catch (_: SecurityException) {
                 runOnUiThread {
+                    preparingText = null
                     Toast.makeText(this, "لا يملك برق إذن قراءة ملفات التطبيق", Toast.LENGTH_LONG).show()
                 }
             }
@@ -292,10 +328,12 @@ class MainActivity : ComponentActivity() {
         archive.parentFile?.mkdirs()
         var completed = false
         try {
-            ZipOutputStream(FileOutputStream(archive)).use { zip ->
+            // ملفات APK مضغوطة أصلاً، فالضغط الإضافي يضيّع الوقت بلا فائدة: نجمعها بدون ضغط وبذاكرة مؤقتة كبيرة
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(archive), 256 * 1024)).use { zip ->
+                zip.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
                 apkFiles.forEach { apk ->
                     zip.putNextEntry(java.util.zip.ZipEntry(apk.name))
-                    apk.inputStream().use { it.copyTo(zip) }
+                    apk.inputStream().use { it.copyTo(zip, 256 * 1024) }
                     zip.closeEntry()
                 }
             }
@@ -325,6 +363,23 @@ class MainActivity : ComponentActivity() {
             afterPerms = { continueIfReady() }
             permLauncher.launch(arrayOf(permission))
         }
+    }
+
+    private fun openPc() {
+        lan.start(displayName)
+        screen = Screen.PC
+    }
+
+    private fun leavePc() {
+        lan.stop()
+        screen = Screen.HOME
+    }
+
+    /** مشاركة رابط تحميل برنامج الحاسوب مع من يريد تثبيته على جهازه. */
+    private fun shareDesktopApp() {
+        val text = "برنامج برق للحاسوب (ويندوز 7 وأعلى): انقل ملفاتك بين الجوال والحاسوب بدون إنترنت.\n" + LanLinks.DESKTOP_DOWNLOAD
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        startActivity(Intent.createChooser(send, "مشاركة برنامج الحاسوب"))
     }
 
     private fun shareApp() {
@@ -357,6 +412,7 @@ class MainActivity : ComponentActivity() {
         displayName = getSharedPreferences("barq_preferences", MODE_PRIVATE)
             .getString("display_name", "").orEmpty()
         engine = BarqEngine(this)
+        lan = LanEngine(this)
         engine.updateDisplayName(displayName)
         ContextCompat.registerReceiver(this, engine.receiver, engine.filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         setContent {
@@ -390,7 +446,8 @@ class MainActivity : ComponentActivity() {
                                             }
                                         },
                                         onShare = { shareApp() },
-                                        onReceived = { screen = Screen.RECEIVED }
+                                        onReceived = { screen = Screen.RECEIVED },
+                                        onPc = { openPc() }
                                     )
                                     Screen.SEND_PICKER -> {
                                         BackHandler { screen = Screen.HOME }
@@ -402,6 +459,7 @@ class MainActivity : ComponentActivity() {
                                             selectedFileCount = selectedFiles.size,
                                             loadingMedia = loadingMedia,
                                             loadingApps = loadingApps,
+                                            preparingText = preparingText,
                                             category = sendCategory,
                                             onCategorySelected = ::selectSendCategory,
                                             onToggleApp = { app ->
@@ -417,6 +475,16 @@ class MainActivity : ComponentActivity() {
                                             onOpenFiles = { openCategoryPicker(sendCategory) },
                                             onSend = ::sendSelection,
                                             onBack = { screen = Screen.HOME }
+                                        )
+                                    }
+                                    Screen.PC -> {
+                                        BackHandler { leavePc() }
+                                        PcScreen(
+                                            lan = lan,
+                                            onBack = { leavePc() },
+                                            onPick = { peer -> pcTarget = peer; pcPicker.launch(arrayOf("*/*")) },
+                                            onShareDesktop = { shareDesktopApp() },
+                                            onOpenReceived = { lan.stop(); screen = Screen.RECEIVED }
                                         )
                                     }
                                     Screen.RECEIVED -> {
@@ -573,6 +641,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (::lan.isInitialized) lan.stop()
         unregisterReceiver(engine.receiver)
         engine.stop()
         super.onDestroy()
