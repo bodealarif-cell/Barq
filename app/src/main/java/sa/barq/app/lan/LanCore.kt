@@ -208,7 +208,9 @@ class LanDiscovery(
     /** يبث "من هناك؟" على كل الشبكات المتصلة. */
     fun probe() {
         val msg = "BARQ1|PROBE|$selfId"
-        broadcastTargets().forEach { sendTo(msg, InetSocketAddress(it, discoveryPort)) }
+        Thread {
+            broadcastTargets().forEach { sendTo(msg, InetSocketAddress(it, discoveryPort)) }
+        }.apply { isDaemon = true }.start()
     }
 
     fun probeTo(address: InetSocketAddress) = sendTo("BARQ1|PROBE|$selfId", address)
@@ -220,7 +222,7 @@ class LanDiscovery(
     private fun sendTo(text: String, to: InetSocketAddress) {
         val s = socket ?: return
         val data = text.toByteArray(Charsets.UTF_8)
-        try { s.send(DatagramPacket(data, data.size, to)) } catch (_: IOException) { }
+        try { s.send(DatagramPacket(data, data.size, to)) } catch (_: Exception) { }
     }
 
     private fun announceLoop() {
